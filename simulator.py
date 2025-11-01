@@ -866,12 +866,10 @@ def parse_args(argv):
 def main():
     args = parse_args(sys.argv[1:])
 
-    # Validate sensor name
     if not args.sensor or not args.sensor.strip():
         print("[ERROR] --sensor cannot be empty")
         sys.exit(1)
 
-    # Validate frequency
     if args.frequency <= 0:
         print(f"[ERROR] --frequency must be positive, got {args.frequency}")
         sys.exit(1)
@@ -932,12 +930,10 @@ def main():
     worker.setup()
     try:
         worker.run()
-        # Only show termination message in standalone mode (not via coordinator)
         if os.getenv("SKIP_HEALTHCHECK", "0") != "1":
             print(f"\n[{args.sensor.upper()}] Sensor simulator terminated.")
     except KeyboardInterrupt:
         worker.stop()
-        # Print newline before interrupt message for clean output
         print(f"\n\n[{args.sensor.upper()}] Interrupted.")
         sys.exit(0)
 
