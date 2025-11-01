@@ -1,32 +1,34 @@
-"""Start the tinyIoT server and a batch of sensor device simulators in sequence."""
+"""Coordinator for tinyIoT server and multiple sensor simulators.
 
-import subprocess
-import sys
-import time
-import threading
-import requests
+Coordinates the complete lifecycle:
+- Starts tinyIoT server (if not already running)
+- Launches sensors sequentially from device_profile.dat
+- Monitors all processes and handles graceful shutdown
+"""
+
+import argparse
 import logging
 import os
-import config_coord as config
+import subprocess
+import sys
+import threading
+import time
 from typing import List, Optional
+
+import requests
+
+import config_coord as config
 
 logging.basicConfig(level=getattr(config, 'LOG_LEVEL', logging.INFO), format='[%(levelname)s] %(message)s')
 
 
+# Sensor configuration data class
+
 class SensorConfig:
-    """Configuration bundle describing a sensor simulator start request."""
+    """Configuration for a single sensor simulator."""
 
     def __init__(self, sensor_type: str, protocol: str = 'mqtt', mode: str = 'random',
                  frequency: int = 2, registration: int = 1) -> None:
-        """Store the simulator command parameters for a single sensor.
-
-        Args:
-            sensor_type: Name of the sensor (must match simulator metadata keys).
-            protocol: ``http`` or ``mqtt`` communication method.
-            mode: ``random`` or ``csv`` data generation strategy.
-            frequency: Sampling interval between readings in seconds.
-            registration: ``1`` to perform AE/CNT registration, ``0`` to skip.
-        """
         self.sensor_type = sensor_type
         self.protocol = protocol
         self.mode = mode
@@ -34,50 +36,118 @@ class SensorConfig:
         self.registration = registration
 
 
-# Sensor definitions live in config_coord.SENSORS so deployments remain configurable
-# without modifying this module. Build the resolved objects once for reuse.
-
+# Device profile loading
 
 def _load_sensor_configs() -> List[SensorConfig]:
-    """Build ``SensorConfig`` objects from ``config_coord.SENSORS``."""
-    raw_options = getattr(config, 'SENSORS', [])
+    """Load sensor configurations from device_profile.dat file."""
+    profile_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'device_profile.dat')
     sensors: List[SensorConfig] = []
 
-    for idx, option in enumerate(raw_options):
-        if isinstance(option, SensorConfig):
-            sensors.append(option)
-            continue
-        if isinstance(option, dict):
-            try:
-                sensor_kwargs = option.copy()
-                if 'sensor' in sensor_kwargs and 'sensor_type' not in sensor_kwargs:
-                    sensor_kwargs['sensor_type'] = sensor_kwargs.pop('sensor')
-                sensors.append(SensorConfig(**sensor_kwargs))
-            except TypeError as exc:
-                logging.error(
-                    f"[COORD] Invalid sensor option at index {idx}: {option!r} ({exc})"
-                )
-        else:
-            logging.error(
-                f"[COORD] Invalid sensor option type at index {idx}: {type(option)!r}"
-            )
+    if not os.path.exists(profile_path):
+        logging.error(f"[COORD] device_profile.dat not found at: {profile_path}")
+        logging.error("[COORD] Please create device_profile.dat in the same directory as coordinator.py")
+        return sensors
+
+    try:
+        with open(profile_path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+
+                if not line or line.startswith('#'):
+                    continue
+
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) != 5:
+                    logging.error(
+                        f"[COORD] Invalid format at line {line_num}: expected 5 fields, got {len(parts)}"
+                    )
+                    continue
+
+                sensor_type, protocol, mode, frequency_str, registration_str = parts
+
+                if protocol not in ['http', 'mqtt']:
+                    logging.error(
+                        f"[COORD] Invalid protocol '{protocol}' at line {line_num}: must be 'http' or 'mqtt'"
+                    )
+                    continue
+
+                if mode not in ['csv', 'random']:
+                    logging.error(
+                        f"[COORD] Invalid mode '{mode}' at line {line_num}: must be 'csv' or 'random'"
+                    )
+                    continue
+
+                try:
+                    frequency = int(frequency_str)
+                    if frequency <= 0:
+                        raise ValueError("frequency must be positive")
+                except ValueError as e:
+                    logging.error(
+                        f"[COORD] Invalid frequency '{frequency_str}' at line {line_num}: {e}"
+                    )
+                    continue
+
+                if registration_str not in ['0', '1']:
+                    logging.error(
+                        f"[COORD] Invalid registration '{registration_str}' at line {line_num}: must be 0 or 1"
+                    )
+                    continue
+                registration = int(registration_str)
+
+                try:
+                    sensors.append(SensorConfig(
+                        sensor_type=sensor_type,
+                        protocol=protocol,
+                        mode=mode,
+                        frequency=frequency,
+                        registration=registration
+                    ))
+                    logging.debug(
+                        f"[COORD] Loaded sensor config: {sensor_type} ({protocol}, {mode}, {frequency}s, reg={registration})"
+                    )
+                except Exception as exc:
+                    logging.error(
+                        f"[COORD] Failed to create sensor config at line {line_num}: {exc}"
+                    )
+                    continue
+
+    except Exception as e:
+        logging.error(f"[COORD] Failed to read device_profile.dat: {e}")
+        return []
 
     if not sensors:
-        logging.warning("[COORD] No valid sensor options found; nothing will be started.")
+        logging.warning("[COORD] No valid sensor configurations found in device_profile.dat")
+    else:
+        logging.info(f"[COORD] Loaded {len(sensors)} sensor configuration(s) from device_profile.dat")
+
     return sensors
 
 
 SENSORS_TO_RUN: List[SensorConfig] = _load_sensor_configs()
 
 
-def wait_for_server(timeout: int = getattr(config, 'WAIT_SERVER_TIMEOUT', 30)) -> bool:
-    """Poll the HTTP endpoint until the CSE responds with 200 OK."""
+# Server health check
+
+def check_server_running(base_url: str) -> bool:
+    """Check if tinyIoT server is currently running."""
     headers = config.HEALTHCHECK_HEADERS
-    url = f"{config.CSE_URL}"
+    req_timeout = getattr(config, 'REQUEST_TIMEOUT', 2)
+    try:
+        res = requests.get(base_url, headers=headers, timeout=req_timeout)
+        if res.status_code == 200:
+            return True
+    except requests.exceptions.RequestException:
+        pass
+    return False
+
+
+def wait_for_server(base_url: str, timeout: int = getattr(config, 'WAIT_SERVER_TIMEOUT', 30)) -> bool:
+    """Wait for tinyIoT server to become responsive."""
+    headers = config.HEALTHCHECK_HEADERS
     req_timeout = getattr(config, 'REQUEST_TIMEOUT', 2)
     for _ in range(timeout):
         try:
-            res = requests.get(url, headers=headers, timeout=req_timeout)
+            res = requests.get(base_url, headers=headers, timeout=req_timeout)
             if res.status_code == 200:
                 logging.info("[COORD] tinyIoT server is responsive.")
                 return True
@@ -88,12 +158,12 @@ def wait_for_server(timeout: int = getattr(config, 'WAIT_SERVER_TIMEOUT', 30)) -
     return False
 
 
+# Simulator process management
 
 class SimulatorHandle:
-    """Wrapper that watches simulator output and exposes readiness helpers."""
+    """Handle for managing a simulator subprocess with output monitoring."""
 
     def __init__(self, proc: subprocess.Popen, sensor_type: str) -> None:
-        """Attach to the simulator process and start monitoring output."""
         self.proc = proc
         self.sensor_type = sensor_type
         self._ready = threading.Event()
@@ -102,12 +172,13 @@ class SimulatorHandle:
         self._reader.start()
 
     def _pump_output(self) -> None:
-        """Stream simulator stdout, echo to console, and update readiness flags."""
+        """Forward stdout and monitor for state transitions."""
         tag = f"[{self.sensor_type.upper()}]"
         try:
             for line in self.proc.stdout:
                 text = line.rstrip('\r\n')
                 print(text, flush=True)
+
                 if text.startswith(f"{tag} run "):
                     self._ready.set()
                 elif 'registration failed' in text.lower():
@@ -124,7 +195,7 @@ class SimulatorHandle:
                 self._failed.set()
 
     def wait_until_ready(self) -> bool:
-        """Block until the simulator prints its ready message or fails."""
+        """Wait for simulator to complete initialization."""
         while True:
             if self._ready.wait(timeout=0.2):
                 return True
@@ -134,7 +205,6 @@ class SimulatorHandle:
                 return False
 
     def terminate(self) -> None:
-        """Request a graceful shutdown of the simulator process."""
         if self.proc and self.proc.poll() is None:
             try:
                 self.proc.terminate()
@@ -142,7 +212,6 @@ class SimulatorHandle:
                 pass
 
     def kill(self) -> None:
-        """Forcefully stop the simulator process."""
         if self.proc and self.proc.poll() is None:
             try:
                 self.proc.kill()
@@ -150,15 +219,21 @@ class SimulatorHandle:
                 pass
 
     def join_reader(self, timeout: float = 1.0) -> None:
-        """Wait for the background log reader to finish."""
         if self._reader.is_alive():
             self._reader.join(timeout)
 
 
-def start_simulator(sensor_config: SensorConfig, index: int) -> Optional[SimulatorHandle]:
-    """Start one simulator subprocess and return a monitor handle (None on failure)."""
+# Simulator launching
+
+def start_simulator(sensor_config: SensorConfig, index: int,
+                    simulator_path: str, base_url: str,
+                    csv_base_path: Optional[str],
+                    cse_id: Optional[str],
+                    mqtt_port: Optional[int],
+                    mqtt_user: Optional[str],
+                    mqtt_pass: Optional[str]) -> Optional[SimulatorHandle]:
+    """Start a single sensor simulator subprocess."""
     python_exec = getattr(config, 'PYTHON_EXEC', 'python3')
-    simulator_path = config.SIMULATOR_PATH
     sim_args = [
         python_exec, simulator_path,
         '--sensor', sensor_config.sensor_type,
@@ -166,15 +241,36 @@ def start_simulator(sensor_config: SensorConfig, index: int) -> Optional[Simulat
         '--mode', sensor_config.mode,
         '--frequency', str(sensor_config.frequency),
         '--registration', str(sensor_config.registration),
+        '--base-url', base_url,
     ]
+
+    if sensor_config.mode == 'csv':
+        if csv_base_path:
+            csv_file = os.path.join(csv_base_path, f"{sensor_config.sensor_type}_data.csv")
+        else:
+            csv_file = f"smartfarm_data/{sensor_config.sensor_type}_data.csv"
+        sim_args.extend(['--csv-path', csv_file])
+
+    if sensor_config.protocol == 'mqtt':
+        if cse_id:
+            sim_args.extend(['--cse-id', cse_id])
+        if mqtt_port:
+            sim_args.extend(['--mqtt-port', str(mqtt_port)])
+        if mqtt_user:
+            sim_args.extend(['--mqtt-user', mqtt_user])
+        if mqtt_pass:
+            sim_args.extend(['--mqtt-pass', mqtt_pass])
+
     logging.info(f"[COORD] Starting simulator [{sensor_config.sensor_type}]...")
     logging.debug(f"[COORD] Command: {' '.join(sim_args)}")
+
     env = os.environ.copy()
     sim_env = getattr(config, 'SIM_ENV', None)
     if isinstance(sim_env, dict):
         env.update(sim_env)
     env['PYTHONUNBUFFERED'] = '1'
     env['SKIP_HEALTHCHECK'] = '1'
+
     try:
         proc = subprocess.Popen(
             sim_args,
@@ -190,30 +286,94 @@ def start_simulator(sensor_config: SensorConfig, index: int) -> Optional[Simulat
         return None
 
 
+# Main entry point
+
 if __name__ == '__main__':
-    # Launch the server, start simulators, supervise them, then clean up.
-    logging.info("[COORD] Starting tinyIoT server...")
-    try:
-        server_proc = subprocess.Popen([config.SERVER_EXEC])
-    except Exception as e:
-        logging.error(f"[COORD] Failed to start tinyIoT server: {e}")
+    parser = argparse.ArgumentParser(description="Coordinator for tinyIoT server and sensor simulators")
+    parser.add_argument('--server-path', help='Path to tinyIoT server executable (required if server is not already running)')
+    parser.add_argument('--simulator-path', required=True, help='Path to simulator.py')
+    parser.add_argument('--base-url', required=True, help='Base URL with CSE RN (e.g., http://127.0.0.1:3000/TinyIoT)')
+    parser.add_argument('--csv-base-path', help='Base directory for CSV files (default: smartfarm_data/)')
+    parser.add_argument('--cse-id', help='CSE-ID for MQTT topic (required when using MQTT protocol)')
+    parser.add_argument('--mqtt-port', type=int, help='MQTT broker port (required when using MQTT protocol)')
+    parser.add_argument('--mqtt-user', help='MQTT broker username (optional, for authenticated brokers)')
+    parser.add_argument('--mqtt-pass', help='MQTT broker password (optional, for authenticated brokers)')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode (show all simulator output)')
+    args = parser.parse_args()
+
+    # Validate that we have sensors to run
+    if not SENSORS_TO_RUN:
+        logging.error("[COORD] No sensors configured in device_profile.dat")
+        logging.error("[COORD] Please create device_profile.dat with sensor configurations")
+        logging.error("[COORD] Example format: temperature,http,csv,3,1")
         sys.exit(1)
 
-    # Stop early if the server never reports healthy.
-    if not wait_for_server():
+    # Validate simulator path exists
+    if not os.path.isfile(args.simulator_path):
+        logging.error(f"[COORD] Simulator not found: {args.simulator_path}")
+        sys.exit(1)
+
+    has_mqtt = any(s.protocol == 'mqtt' for s in SENSORS_TO_RUN)
+    has_csv = any(s.mode == 'csv' for s in SENSORS_TO_RUN)
+
+    if has_mqtt and not args.cse_id:
+        logging.error("[COORD] --cse-id is required when using MQTT protocol")
+        sys.exit(1)
+
+    if has_mqtt and not args.mqtt_port:
+        logging.error("[COORD] --mqtt-port is required when using MQTT protocol")
+        sys.exit(1)
+
+    # Validate server path if provided
+    if args.server_path and not os.path.isfile(args.server_path):
+        logging.error(f"[COORD] Server executable not found: {args.server_path}")
+        sys.exit(1)
+
+    # Server startup or detection
+    server_proc = None
+    server_already_running = check_server_running(args.base_url)
+
+    if server_already_running:
+        logging.info("[COORD] tinyIoT server is already running.")
+    else:
+        logging.info("[COORD] tinyIoT server is not running.")
+        if not args.server_path:
+            logging.error("[COORD] Server is not running and --server-path was not provided.")
+            logging.error("[COORD] Please either:")
+            logging.error("[COORD]   1. Start tinyIoT server manually, or")
+            logging.error("[COORD]   2. Provide --server-path parameter")
+            sys.exit(1)
+
+        logging.info(f"[COORD] Starting tinyIoT server from: {args.server_path}")
         try:
-            server_proc.terminate()
-        except Exception:
-            pass
-        sys.exit(1)
+            server_proc = subprocess.Popen([args.server_path])
+        except Exception as e:
+            logging.error(f"[COORD] Failed to start tinyIoT server: {e}")
+            sys.exit(1)
 
+        if not wait_for_server(args.base_url):
+            try:
+                server_proc.terminate()
+            except Exception:
+                pass
+            sys.exit(1)
+
+    # Sequential simulator startup
     simulator_handles: List[SimulatorHandle] = []
     logging.info(f"[COORD] starting {len(SENSORS_TO_RUN)} sensor simulators...")
 
     try:
-        # Start simulators sequentially and stop the sequence on failure.
         for i, sensor_conf in enumerate(SENSORS_TO_RUN):
-            handle = start_simulator(sensor_conf, i)
+            handle = start_simulator(
+                sensor_conf, i,
+                args.simulator_path,
+                args.base_url,
+                args.csv_base_path,
+                args.cse_id,
+                args.mqtt_port,
+                args.mqtt_user,
+                args.mqtt_pass
+            )
             if not handle:
                 logging.error(f"[COORD] Failed to start simulator [{sensor_conf.sensor_type}]")
                 continue
@@ -222,7 +382,6 @@ if __name__ == '__main__':
                 logging.info(f"[COORD] Simulator [{sensor_conf.sensor_type}] ready.")
                 simulator_handles.append(handle)
             else:
-                # Abort additional launches if one simulator fails during initialization.
                 logging.error(f"[COORD] Simulator [{sensor_conf.sensor_type}] failed during setup; terminating start sequence.")
                 handle.terminate()
                 handle.join_reader()
@@ -230,33 +389,37 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logging.info("[COORD] start interrupted by user.")
 
-    # Shut down immediately if every simulator failed to launch.
+    # Startup validation
     if not simulator_handles:
         logging.error("[COORD] No simulators were started successfully.")
-        try:
-            server_proc.terminate()
-            server_proc.wait(timeout=getattr(config, 'SERVER_TERM_WAIT', 5))
-        except Exception:
-            pass
+        if server_proc:
+            try:
+                server_proc.terminate()
+                server_proc.wait(timeout=getattr(config, 'SERVER_TERM_WAIT', 5))
+            except Exception:
+                pass
         sys.exit(1)
 
     ok = len(simulator_handles)
     need = len(SENSORS_TO_RUN)
     if ok != need:
-        # Tear down partially started runs to avoid inconsistent state.
         ok_names = [h.sensor_type for h in simulator_handles]
         need_names = [c.sensor_type for c in SENSORS_TO_RUN]
         fail_names = [n for n in need_names if n not in ok_names]
         logging.error(f"[COORD] start failed: started {ok}/{need}. failed={fail_names}")
 
+        running_count = sum(1 for h in simulator_handles if h.proc and h.proc.poll() is None)
+        if running_count > 0:
+            logging.info(f"[COORD] Terminating {running_count} simulator(s)...")
+
         for handle in simulator_handles:
             if handle.proc and handle.proc.poll() is None:
                 try:
-                    logging.info(f"[COORD] Terminating simulator [{handle.sensor_type}]...")
                     handle.terminate()
                     handle.proc.wait(timeout=getattr(config, 'PROC_TERM_WAIT', 5))
                 except Exception:
-                    logging.warning(f"[COORD] Failed to terminate simulator [{handle.sensor_type}]; killing...")
+                    if args.debug:
+                        logging.warning(f"[COORD] Failed to terminate simulator [{handle.sensor_type}]; killing...")
                     handle.kill()
             handle.join_reader(getattr(config, 'JOIN_READER_TIMEOUT', 1.0))
 
@@ -275,10 +438,10 @@ if __name__ == '__main__':
 
     logging.info("[COORD] Successfully started all simulators.")
 
+    # Monitoring loop
     try:
-        # Monitor the processes until the server stops or every simulator exits.
         while True:
-            if server_proc.poll() is not None:
+            if server_proc and server_proc.poll() is not None:
                 logging.error("[COORD] tinyIoT server has stopped unexpectedly.")
                 break
             running_sims = sum(1 for h in simulator_handles if h.proc.poll() is None)
@@ -287,29 +450,33 @@ if __name__ == '__main__':
                 break
             time.sleep(5)
     except KeyboardInterrupt:
-        logging.info("[COORD] Shutting down (KeyboardInterrupt)...")
+        time.sleep(0.5)  # Let tinyIoT server finish its shutdown logs first
+        print()  # Print blank line for clean separation
     finally:
-        # Terminate all processes before exiting the coordinator.
-        logging.info("[COORD] Terminating all processes...")
+        # Graceful shutdown
         cleanup_interrupted = False
+
+        running_count = sum(1 for h in simulator_handles if h.proc and h.proc.poll() is None)
 
         for handle in simulator_handles:
             if handle.proc and handle.proc.poll() is None:
                 try:
-                    logging.info(f"[COORD] Terminating simulator [{handle.sensor_type}]...")
                     handle.terminate()
                     handle.proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    logging.warning(f"[COORD] Simulator [{handle.sensor_type}] did not exit in time; killing...")
+                    if args.debug:
+                        logging.warning(f"[COORD] Simulator [{handle.sensor_type}] did not exit in time; killing...")
                     handle.kill()
                 except KeyboardInterrupt:
                     cleanup_interrupted = True
-                    logging.warning(
-                        f"[COORD] Cleanup interrupted while waiting for simulator [{handle.sensor_type}]; killing..."
-                    )
+                    if args.debug:
+                        logging.warning(
+                            f"[COORD] Cleanup interrupted while waiting for simulator [{handle.sensor_type}]; killing..."
+                        )
                     handle.kill()
                 except Exception as e:
-                    logging.warning(f"[COORD] Failed to terminate simulator [{handle.sensor_type}]: {e}; killing...")
+                    if args.debug:
+                        logging.warning(f"[COORD] Failed to terminate simulator [{handle.sensor_type}]: {e}; killing...")
                     handle.kill()
             handle.join_reader()
 
