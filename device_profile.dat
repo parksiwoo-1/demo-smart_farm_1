@@ -1,0 +1,15 @@
+# Device Profile Configuration
+# Format: sensor_type,protocol,mode,frequency,registration
+# sensor_type: name of the sensor (temperature, humidity, co2, soil, etc.)
+# protocol: http or mqtt
+# mode: csv or random
+# frequency: sampling interval in seconds
+# registration: 1 (enable AE/CNT registration) or 0 (skip registration)
+#
+# Lines starting with '#' are comments and will be ignored
+# Empty lines will be ignored
+
+temperature,http,csv,3,1
+humidity,http,csv,3,1
+co2,mqtt,csv,3,1
+soil,mqtt,csv,3,1
