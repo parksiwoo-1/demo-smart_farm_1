@@ -1,29 +1,15 @@
-"""Device simulator configuration for tinyIoT."""
-import os
+"""Configuration for simulator."""
 
-_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# CSE Configuration
+CSE_RN = None  # CSE Resource Name (from --base-url)
+CSE_ID = None  # CSE-ID for MQTT topics (from --cse-id)
 
-# CSE identifiers shared by HTTP and MQTT transports.
-CSE_NAME = "tinyiot"
-CSE_RN = "TinyIoT"
+# HTTP Configuration
+HTTP_HOST = None
+HTTP_PORT = None
+HTTP_BASE = None
+BASE_URL = None
 
-# HTTP endpoint settings.
-# configure for your environment
-HTTP_HOST = "127.0.0.1"
-HTTP_PORT = 3000
-HTTP_BASE = f"http://{HTTP_HOST}:{HTTP_PORT}"
-BASE_URL_RN = f"{HTTP_BASE}/{CSE_RN}"
-
-# MQTT broker connection settings.
-# configure for your environment 
-MQTT_HOST = "127.0.0.1"
-MQTT_PORT = 1883
-
-# Optional broker credentials. Leave ``None`` (or empty) when Mosquitto allows anonymous clients.
-MQTT_USER = "test"
-MQTT_PASS = "mqtt"
-
-# HTTP headers and content-type codes used by oneM2M requests.
 HTTP_DEFAULT_HEADERS = {
     "Accept": "application/json",
     "X-M2M-Origin": "CAdmin",
@@ -44,7 +30,16 @@ HTTP_CONTENT_TYPE_MAP = {
     "cin": 4,
 }
 
-# Resource metadata keyed by logical sensor name.
+# MQTT Configuration
+MQTT_HOST = None
+MQTT_PORT = None
+MQTT_USER = None  # Optional: Set if broker requires authentication
+MQTT_PASS = None  # Optional: Set if broker requires authentication
+
+# CSV Data Configuration
+CSV_PATH = None
+
+# Sensor Resource Definitions
 SENSOR_RESOURCES = {
     "temperature": {
         "ae": "CTemperatureSensor",
@@ -72,7 +67,6 @@ SENSOR_RESOURCES = {
     },
 }
 
-# Fallback metadata used when a sensor definition is missing above.
 GENERIC_SENSOR_TEMPLATE = {
     "ae": "C{sensor}Sensor",
     "cnt": "{sensor}",
@@ -80,14 +74,7 @@ GENERIC_SENSOR_TEMPLATE = {
     "origin": "C{sensor}Sensor",
 }
 
-# CSV fixtures used when sensors run in CSV mode.
-TEMPERATURE_CSV = os.path.join(_CURRENT_DIR, "smartfarm_data", "temperature_data.csv")
-HUMIDITY_CSV = os.path.join(_CURRENT_DIR, "smartfarm_data", "humidity_data.csv")
-CO2_CSV = os.path.join(_CURRENT_DIR, "smartfarm_data", "co2_data.csv")
-SOIL_CSV = os.path.join(_CURRENT_DIR, "smartfarm_data", "soil_data.csv")
-
-# Random data-generation profiles for supported sensors.
-# data_type can be set to int | float | string.
+# Random Data Generation Profiles
 TEMPERATURE_PROFILE = {
     "data_type": "float",
     "min": 20.0,
@@ -112,26 +99,24 @@ SOIL_PROFILE = {
     "max": 60.0,
 }
 
-# Default random profile when a sensor is not explicitly listed above.
-# data_type can be set to int | float | string.
 GENERIC_RANDOM_PROFILE = {
     "data_type": "float",
     "min": 0.0,
     "max": 100.0,
 }
 
-# Timeout and retry behaviour (seconds) shared by both transports.
+# Timeout and Connection Settings
 CONNECT_TIMEOUT = 2
 READ_TIMEOUT = 10
-RETRY_WAIT_SECONDS = 5
-SEND_ERROR_THRESHOLD = 5
 HTTP_REQUEST_TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 
-# Connection/response tuning.
+RETRY_WAIT_SECONDS = 5
+SEND_ERROR_THRESHOLD = 5
+
 MQTT_KEEPALIVE = 60
 MQTT_CONNECT_WAIT = 10
 MQTT_RESPONSE_TIMEOUT = 5
 
-# Default container retention limits.
+# Container Retention Limits
 CNT_MNI = 1000
-CNT_MBS = 10485760
+CNT_MBS = 10485760  # 10MB
