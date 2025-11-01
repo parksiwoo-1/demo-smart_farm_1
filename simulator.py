@@ -1,28 +1,30 @@
-"""Single-sensor oneM2M device simulator for HTTP and MQTT transports."""
+"""oneM2M sensor simulator supporting HTTP and MQTT protocols."""
 
 import argparse
 import csv
 import json
 import os
 import random
+import signal
 import string
 import sys
 import threading
 import time
 import uuid
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import paho.mqtt.client as mqtt
 import requests
-import signal
 
 import config_sim as config
 
 HTTP = requests.Session()
 
 
+# Configuration helpers
+
 def _env_or_config(name: str, default=None):
-    """Return environment override when present, otherwise fall back to config module."""
     return os.getenv(name, getattr(config, name, default))
 
 
@@ -56,6 +58,7 @@ def _env_or_config_bool(name: str, default: bool = False) -> bool:
 
 
 def _normalize_optional(value):
+    """Convert empty/null strings to None."""
     if value is None:
         return None
     if isinstance(value, str):
@@ -65,8 +68,9 @@ def _normalize_optional(value):
         return stripped
     return value
 
+
 def _describe_mqtt_rc(reason) -> str:
-    """Return a human-friendly MQTT reason description without local tables."""
+    """Convert MQTT reason code to human-readable description."""
     if hasattr(reason, "getName"):
         try:
             return reason.getName()
@@ -83,11 +87,13 @@ def _describe_mqtt_rc(reason) -> str:
     except Exception:
         return "Unknown error"
 
+
+# HTTP headers builder
+
 class Headers:
-    """Utility that assembles per-request oneM2M HTTP headers."""
+    """Build oneM2M HTTP headers with origin, RVI, RI, and content-type."""
 
     def __init__(self, content_type: Optional[str] = None, origin: str = "CAdmin", ri: str = "req"):
-        """Build oneM2M HTTP headers: start from defaults, set X-M2M-Origin/RI, and add Content-Type (application/json;ty=…) only when a resource type is given."""
         self.headers = dict(config.HTTP_DEFAULT_HEADERS)
         self.headers["X-M2M-Origin"] = origin
         self.headers["X-M2M-RI"] = ri
@@ -96,22 +102,23 @@ class Headers:
 
     @staticmethod
     def get_content_type(content_type: str):
-        """Translate logical names into numeric content type codes."""
         return config.HTTP_CONTENT_TYPE_MAP.get(content_type)
 
 
-def url_ae(ae: str) -> str:
-    """Return the absolute URL of an AE resource."""
-    return f"{config.BASE_URL_RN}/{ae}"
+# URL builders
+
+def build_ae_url(ae: str) -> str:
+    return f"{config.BASE_URL}/{ae}"
 
 
-def url_cnt(ae: str, cnt: str) -> str:
-    """Return the absolute URL of a CNT resource under the given AE."""
-    return f"{config.BASE_URL_RN}/{ae}/{cnt}"
+def build_cnt_url(ae: str, cnt: str) -> str:
+    return f"{config.BASE_URL}/{ae}/{cnt}"
 
 
-def _x_rsc(resp) -> Optional[int]:
-    """Extract the ``X-M2M-RSC`` response header when available."""
+# oneM2M response parsing
+
+def _get_response_code(resp) -> Optional[int]:
+    """Extract oneM2M RSC from HTTP headers."""
     try:
         v = resp.headers.get("X-M2M-RSC") or resp.headers.get("x-m2m-rsc")
         return int(v) if v is not None else None
@@ -119,13 +126,15 @@ def _x_rsc(resp) -> Optional[int]:
         return None
 
 
-def _admin_delete_with_verification(paths: List[str]) -> bool:
-    """Delete as CAdmin; all targets must succeed — exit on any failure including 404."""
+# Resource deletion with admin privileges
+
+def _delete_as_admin(paths: List[str]) -> bool:
+    """Delete resources as CAdmin (used for conflict resolution)."""
     hdr = Headers(origin="CAdmin").headers
     for p in dict.fromkeys(paths):
         try:
-            r = HTTP.delete(p, headers=hdr, timeout=(config.HTTP_REQUEST_TIMEOUT))
-            rsc = _x_rsc(r)
+            r = HTTP.delete(p, headers=hdr, timeout=config.HTTP_REQUEST_TIMEOUT)
+            rsc = _get_response_code(r)
             if not (r.status_code in (200, 202, 204) or rsc == 2002):
                 print(f"[ERROR] DELETE {p} -> {r.status_code} rsc={rsc} body={getattr(r, 'text', '')}")
                 sys.exit(1)
@@ -135,19 +144,24 @@ def _admin_delete_with_verification(paths: List[str]) -> bool:
     return True
 
 
+# HTTP resource creation
+
 def http_create_ae(ae_rn: str, api: str) -> Tuple[bool, Optional[str]]:
-    """Create AE and return AEI; on RN conflict delete existing and retry once; fallback to Origin if AEI missing."""
+    """Create AE via HTTP with automatic conflict resolution.
+
+    Returns (success, aei) tuple. On conflict, deletes existing resource and retries.
+    """
     unique_origin = f"{ae_rn}-{uuid.uuid4().hex[:8]}"
 
     def _try_create(origin_for_create: str):
         try:
             r = HTTP.post(
-                config.BASE_URL_RN,
+                config.BASE_URL,
                 headers=Headers("ae", origin=origin_for_create).headers,
                 json={"m2m:ae": {"rn": ae_rn, "api": api, "rr": True}},
-                timeout=(config.HTTP_REQUEST_TIMEOUT)
+                timeout=config.HTTP_REQUEST_TIMEOUT
             )
-            rsc_hdr = _x_rsc(r)
+            rsc_hdr = _get_response_code(r)
             if r.status_code in (200, 201) or rsc_hdr == 2001:
                 try:
                     js = r.json()
@@ -165,13 +179,14 @@ def http_create_ae(ae_rn: str, api: str) -> Tuple[bool, Optional[str]]:
     if ok:
         return True, aei
 
+    # Handle conflict
     if isinstance(r, requests.Response):
-        rsc = _x_rsc(r)
+        rsc = _get_response_code(r)
         body_text = r.text if hasattr(r, "text") else ""
         if r.status_code in (409,) or rsc == 4105 or "already exists" in (body_text or "").lower():
-            candidates = [url_ae(ae_rn)]
+            candidates = [build_ae_url(ae_rn)]
             print(f"[HTTP] AE RN duplicate -> DELETE {candidates} (as CAdmin) and retry")
-            if not _admin_delete_with_verification(candidates):
+            if not _delete_as_admin(candidates):
                 return False, None
             ok2, aei2, r2 = _try_create(unique_origin)
             if ok2:
@@ -190,14 +205,15 @@ def http_create_ae(ae_rn: str, api: str) -> Tuple[bool, Optional[str]]:
 
 
 def http_create_cnt(ae_rn: str, cnt_rn: str, origin_aei: str) -> bool:
-    """Create CNT under AE using origin AEI; on RN conflict delete existing and retry once; return True on success else False."""
+    """Create Container via HTTP with automatic conflict resolution."""
+
     def _try_create():
         try:
             r = HTTP.post(
-                url_ae(ae_rn),
+                build_ae_url(ae_rn),
                 headers=Headers("cnt", origin=origin_aei).headers,
                 json={"m2m:cnt": {"rn": cnt_rn, "mni": config.CNT_MNI, "mbs": config.CNT_MBS}},
-                timeout=(config.HTTP_REQUEST_TIMEOUT)
+                timeout=config.HTTP_REQUEST_TIMEOUT
             )
             if r.status_code in (200, 201):
                 return True, r
@@ -209,13 +225,14 @@ def http_create_cnt(ae_rn: str, cnt_rn: str, origin_aei: str) -> bool:
     if ok:
         return True
 
+    # Handle conflict
     if isinstance(r, requests.Response):
-        rsc = _x_rsc(r)
+        rsc = _get_response_code(r)
         body_text = r.text if hasattr(r, "text") else ""
         if r.status_code in (409,) or rsc == 4105 or "already exists" in (body_text or "").lower():
-            candidates = [url_cnt(ae_rn, cnt_rn)]
+            candidates = [build_cnt_url(ae_rn, cnt_rn)]
             print(f"[HTTP] CNT RN duplicate -> DELETE {candidates} (as CAdmin) and retry")
-            if not _admin_delete_with_verification(candidates):
+            if not _delete_as_admin(candidates):
                 return False
             ok2, r2 = _try_create()
             if ok2:
@@ -233,11 +250,11 @@ def http_create_cnt(ae_rn: str, cnt_rn: str, origin_aei: str) -> bool:
         return False
 
 
-def get_latest_con(ae_rn, cnt_rn) -> Optional[str]:
-    """Fetch the latest ``cin.con`` value for the container if present."""
-    la = f"{url_cnt(ae_rn, cnt_rn)}/la"
+def get_latest_content(ae_rn, cnt_rn) -> Optional[str]:
+    """Retrieve latest CIN value from container (for timeout verification)."""
+    la = f"{build_cnt_url(ae_rn, cnt_rn)}/la"
     try:
-        r = HTTP.get(la, headers=config.HTTP_GET_HEADERS, timeout=(config.HTTP_REQUEST_TIMEOUT))
+        r = HTTP.get(la, headers=config.HTTP_GET_HEADERS, timeout=config.HTTP_REQUEST_TIMEOUT)
         if r.status_code == 200:
             js = r.json()
             return js.get("m2m:cin", {}).get("con")
@@ -246,9 +263,9 @@ def get_latest_con(ae_rn, cnt_rn) -> Optional[str]:
     return None
 
 
-def _healthcheck_once() -> bool:
-    """Attempt a single HTTP health check against the tinyIoT CSE."""
-    url = getattr(config, "CSE_URL", None) or getattr(config, "BASE_URL_RN", None)
+def check_server_health() -> bool:
+    """Perform health check against CSE server."""
+    url = getattr(config, "CSE_URL", None) or getattr(config, "BASE_URL", None)
     if not url:
         return True
     headers = config.HTTP_GET_HEADERS
@@ -268,12 +285,12 @@ def _healthcheck_once() -> bool:
 
 
 def send_cin_http(ae_rn: str, cnt_rn: str, value, origin_aei: str) -> bool:
-    """POST CIN to AE/CNT using origin AEI; success on 200/201, on timeout verify via /la and accept if stored, else False."""
+    """Send CIN via HTTP. On timeout, verifies if data was stored via /la endpoint."""
     hdr = Headers(content_type="cin", origin=origin_aei).headers
     body = {"m2m:cin": {"con": value}}
-    u = url_cnt(ae_rn, cnt_rn)
+    u = build_cnt_url(ae_rn, cnt_rn)
     try:
-        r = HTTP.post(u, headers=hdr, json=body, timeout=(config.HTTP_REQUEST_TIMEOUT))
+        r = HTTP.post(u, headers=hdr, json=body, timeout=config.HTTP_REQUEST_TIMEOUT)
         if r.status_code in (200, 201):
             return True
         try:
@@ -283,7 +300,7 @@ def send_cin_http(ae_rn: str, cnt_rn: str, value, origin_aei: str) -> bool:
         print(f"[ERROR] POST {u} -> {r.status_code} {text}")
         return False
     except requests.exceptions.ReadTimeout:
-        latest = get_latest_con(ae_rn, cnt_rn)
+        latest = get_latest_content(ae_rn, cnt_rn)
         if latest == str(value):
             print("[WARN] POST timed out but verified via /la (stored).")
             return True
@@ -294,8 +311,14 @@ def send_cin_http(ae_rn: str, cnt_rn: str, value, origin_aei: str) -> bool:
         return False
 
 
+# MQTT oneM2M client
+
 class MqttOneM2MClient:
-    """Paho MQTT client specialized for oneM2M request/response messaging."""
+    """MQTT client implementing oneM2M request/response pattern.
+
+    Uses /oneM2M/req/{origin}/{cse-id}/json and /oneM2M/resp/{origin}/{cse-id}/json topics.
+    Supports origin switching after AE registration (temp → AEI).
+    """
 
     def __init__(self, broker, port, origin, cse_csi, cse_rn="TinyIoT"):
         self.broker = broker
@@ -331,7 +354,7 @@ class MqttOneM2MClient:
         self.resp_topic = f"/oneM2M/resp/{self.origin}/{self.cse_csi}/json"
 
     def set_origin(self, new_origin: str):
-        """Switch origin (fr) at runtime and resubscribe to new response topic."""
+        """Update origin and resubscribe (called after AE registration to switch to AEI)."""
         previous_resp_topic = self.resp_topic
         self.origin = new_origin
         self._update_topics()
@@ -366,7 +389,6 @@ class MqttOneM2MClient:
     def on_disconnect(self, client, userdata, flags, reason_code, properties=None):
         code = getattr(reason_code, "value", reason_code)
         code = 0 if code is None else code
-        print(f"[MQTT] Disconnected rc={code}")
         self.connected.clear()
 
     def on_message(self, client, userdata, msg):
@@ -379,7 +401,7 @@ class MqttOneM2MClient:
             print(f"[ERROR] Failed to parse MQTT response: {e}")
 
     def connect(self) -> bool:
-        """Connect to the broker, start the loop, and subscribe to the response topic."""
+        """Connect to MQTT broker and wait for confirmation."""
         try:
             if self.username is not None:
                 self.client.username_pw_set(self.username, self.password or "")
@@ -390,6 +412,7 @@ class MqttOneM2MClient:
             self._last_connect_desc = None
             self.client.connect(self.broker, self.port, keepalive=self.keepalive)
             self.client.loop_start()
+
             if not self._connect_event.wait(timeout=self.connect_wait):
                 print(f"[ERROR] MQTT broker handshake timeout after {self.connect_wait}s.")
                 self.client.loop_stop()
@@ -421,13 +444,13 @@ class MqttOneM2MClient:
             except Exception:
                 pass
             self.connected.clear()
-        print("[MQTT] Disconnected.")
 
     def _send_request(self, body, ok_rsc=(2000, 2001, 2004)):
-        """Send a oneM2M request and block until the matching response arrives."""
+        """Send oneM2M request via MQTT and wait for response."""
         if not self.connected.is_set():
             print("[ERROR] MQTT request attempted while client is disconnected.")
             return "timeout", None
+
         request_id = str(uuid.uuid4())
         message = {
             "fr": self.origin,
@@ -441,6 +464,7 @@ class MqttOneM2MClient:
         print(f"[MQTT][SEND] {json.dumps(message, ensure_ascii=False)}")
         self.response_received.clear()
         self.client.publish(self.req_topic, json.dumps(message))
+
         if self.response_received.wait(timeout=self.response_timeout):
             response = self.last_response or {}
             try:
@@ -454,11 +478,11 @@ class MqttOneM2MClient:
         return "timeout", None
 
     def create_ae(self, ae_name: str, api: str) -> Tuple[bool, Optional[str]]:
-        """Create AE over MQTT; on 4105 (RN duplicate) delete via HTTP as CAdmin and retry once; return (ok, aei)."""
+        """Create AE via MQTT with automatic conflict resolution."""
         req = {
             "to": self.cse_rn,
-            "op": 1,
-            "ty": 2,
+            "op": 1,  # CREATE
+            "ty": 2,  # AE
             "pc": {"m2m:ae": {"rn": ae_name, "api": api, "rr": True}}
         }
         status, resp = self._send_request(req, ok_rsc=(2001,))
@@ -474,10 +498,10 @@ class MqttOneM2MClient:
                 rsc = int((resp or {}).get("rsc", 0))
             except Exception:
                 rsc = 0
-            if rsc == 4105:
-                candidates = [url_ae(ae_name)]
+            if rsc == 4105:  # Conflict
+                candidates = [build_ae_url(ae_name)]
                 print(f"[MQTT] AE RN duplicate -> DELETE {candidates} (as CAdmin) and retry")
-                if not _admin_delete_with_verification(candidates):
+                if not _delete_as_admin(candidates):
                     return False, None
                 status2, resp2 = self._send_request(req, ok_rsc=(2001,))
                 if status2 == "ok":
@@ -494,11 +518,11 @@ class MqttOneM2MClient:
         return False, None
 
     def create_cnt(self, ae_name: str, cnt_name: str) -> bool:
-        """Create CNT under AE over MQTT; on 4105 delete via HTTP as CAdmin and retry once."""
+        """Create Container via MQTT with automatic conflict resolution."""
         req = {
             "to": f"{self.cse_rn}/{ae_name}",
-            "op": 1,
-            "ty": 3,
+            "op": 1,  # CREATE
+            "ty": 3,  # CNT
             "pc": {"m2m:cnt": {"rn": cnt_name}}
         }
         status, resp = self._send_request(req, ok_rsc=(2001,))
@@ -509,10 +533,10 @@ class MqttOneM2MClient:
                 rsc = int((resp or {}).get("rsc", 0))
             except Exception:
                 rsc = 0
-            if rsc == 4105:
-                candidates = [url_cnt(ae_name, cnt_name)]
+            if rsc == 4105:  # Conflict
+                candidates = [build_cnt_url(ae_name, cnt_name)]
                 print(f"[MQTT] CNT RN duplicate -> DELETE {candidates} (as CAdmin) and retry")
-                if not _admin_delete_with_verification(candidates):
+                if not _delete_as_admin(candidates):
                     return False
                 status2, _ = self._send_request(req, ok_rsc=(2001,))
                 return status2 == "ok"
@@ -522,15 +546,15 @@ class MqttOneM2MClient:
         return False
 
     def send_cin(self, ae_name: str, cnt_name: str, value):
-        """Publish a CIN using the MQTT binding (one retry on failure)."""
+        """Send CIN via MQTT with single retry."""
         attempts = 0
         status, resp = "", None
         while attempts < 2:
             attempts += 1
             status, resp = self._send_request({
                 "to": f"{self.cse_rn}/{ae_name}/{cnt_name}",
-                "op": 1,
-                "ty": 4,
+                "op": 1,  # CREATE
+                "ty": 4,  # CIN
                 "pc": {"m2m:cin": {"con": value}}
             }, ok_rsc=(2001,))
             if status == "ok":
@@ -547,8 +571,10 @@ class MqttOneM2MClient:
         return False
 
 
-def ensure_registration_http(ae: str, cnt: str, api: str, do_register: bool) -> Tuple[bool, Optional[str]]:
-    """If do_register is True, create AE then CNT using AEI and return (True, AEI); on failure return (False, None); if skipped return (True, None)."""
+# HTTP resource registration
+
+def ensure_http_registration(ae: str, cnt: str, api: str, do_register: bool) -> Tuple[bool, Optional[str]]:
+    """Ensure AE and Container resources exist via HTTP."""
     if not do_register:
         return True, None
     print(f"[HTTP] AE create -> {ae}")
@@ -561,11 +587,13 @@ def ensure_registration_http(ae: str, cnt: str, api: str, do_register: bool) -> 
     return True, aei
 
 
+# Random data generation
+
 VALID_PROFILE_TYPES = {"int", "float", "string"}
 
 
-def _validate_random_profile(sensor_key: str, profile: Any) -> Dict[str, Any]:
-    """Return a sanitized random profile, validating required fields per data type."""
+def validate_random_profile(sensor_key: str, profile: Any) -> Dict[str, Any]:
+    """Validate and normalize random data generation profile."""
     if not isinstance(profile, dict):
         raise ValueError(f"[{sensor_key}] Random profile must be a mapping, got {type(profile).__name__}.")
 
@@ -603,8 +631,10 @@ def _validate_random_profile(sensor_key: str, profile: Any) -> Dict[str, Any]:
     return profile
 
 
-def build_sensor_meta(name: str) -> Dict:
-    """Return the aggregated metadata describing how a sensor should operate."""
+# Sensor metadata builder
+
+def build_sensor_metadata(name: str) -> Dict:
+    """Build sensor metadata from config or generate from template."""
     sensor_key = name.lower()
     upper = sensor_key.upper()
     resources = getattr(config, "SENSOR_RESOURCES", {})
@@ -628,25 +658,26 @@ def build_sensor_meta(name: str) -> Dict:
     meta.setdefault("origin", meta.get("ae") or f"C{sensor_key}Sensor")
 
     if not meta.get("csv"):
-        legacy_csv = getattr(config, f"{upper}_CSV", None)
-        if legacy_csv:
-            meta["csv"] = legacy_csv
+        if config.CSV_PATH:
+            meta["csv"] = config.CSV_PATH
 
     profile = meta.get("profile") or getattr(config, f"{upper}_PROFILE", None)
     if profile is None:
         profile = getattr(config, "GENERIC_RANDOM_PROFILE", {"data_type": "float", "min": 0.0, "max": 100.0})
 
-    meta["profile"] = _validate_random_profile(sensor_key, profile)
+    meta["profile"] = validate_random_profile(sensor_key, profile)
     return meta
 
 
+# Sensor worker
+
 class SensorWorker:
-    """Lifecycle manager that emits sensor readings over HTTP or MQTT."""
+    """Main sensor simulator managing lifecycle: setup → run → stop."""
 
     def __init__(self, sensor_name: str, protocol: str, mode: str,
                  period_sec: float, registration: int):
         try:
-            self.meta = build_sensor_meta(sensor_name)
+            self.meta = build_sensor_metadata(sensor_name)
         except ValueError as exc:
             print(f"[ERROR] {exc}")
             raise SystemExit(1) from exc
@@ -656,7 +687,7 @@ class SensorWorker:
         self.period_sec = float(period_sec)
         self.registration = registration
         self.stop_flag = threading.Event()
-        self.csv_data, self.csv_index, self.err = [], 0, 0
+        self.csv_data, self.csv_index = [], 0
         self.mqtt = None
         self.aei: Optional[str] = None
         self._signals_installed = False
@@ -668,7 +699,6 @@ class SensorWorker:
 
         def _handler(signum, frame):
             self.stop()
-            print(f"\n[SIM] Caught signal {signum}. Stopping...", flush=True)
 
         for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             try:
@@ -677,10 +707,11 @@ class SensorWorker:
                 pass
 
     def setup(self):
-        """Resolve metadata, perform optional registration, and stage data sources."""
+        """Register resources and load data."""
         self._install_signal_handlers_once()
+
         if self.protocol == "http":
-            ok, aei = ensure_registration_http(
+            ok, aei = ensure_http_registration(
                 self.meta["ae"], self.meta["cnt"], self.meta["api"], do_register=(self.registration == 1)
             )
             if self.registration == 1 and not ok:
@@ -695,7 +726,7 @@ class SensorWorker:
                 broker_host,
                 broker_port,
                 tmp_origin,
-                config.CSE_NAME,
+                config.CSE_ID,
                 config.CSE_RN,
             )
             if not self.mqtt.connect():
@@ -713,8 +744,6 @@ class SensorWorker:
                 if not self.mqtt.create_cnt(self.meta["ae"], self.meta["cnt"]):
                     print("[ERROR] MQTT CNT create failed.")
                     raise SystemExit(1)
-            else:
-                pass
 
         if self.mode == "csv":
             path = self.meta.get("csv")
@@ -743,28 +772,28 @@ class SensorWorker:
                 raise SystemExit(1)
 
     def stop(self):
-        """Signal the worker loop to stop after the current iteration."""
         self.stop_flag.set()
 
     def _next_value(self) -> str:
-        """Return the next payload to send based on the configured mode."""
+        """Generate next sensor reading value."""
         if self.mode == "csv":
             v = self.csv_data[self.csv_index]
             self.csv_index += 1
             return v
+
         profile = self.meta["profile"]
         dt = profile.get("data_type", "float")
         if dt == "int":
             return str(random.randint(int(profile.get("min", 0)), int(profile.get("max", 100))))
         if dt == "float":
-            return f"{random.uniform(float(profile.get("min", 0.0)), float(profile.get("max", 100.0))):.2f}"
+            return f"{random.uniform(float(profile.get('min', 0.0)), float(profile.get('max', 100.0))):.2f}"
         if dt == "string":
             length = int(profile.get("length", 8))
             return "".join(random.choices(string.ascii_letters + string.digits, k=length))
         return "0"
 
     def run(self):
-        """Main worker loop that enforces the send cadence; on any send failure, print error and exit."""
+        """Main sensor loop sending readings at configured frequency."""
         print(f"[{self.sensor_name.upper()}] run (protocol={self.protocol}, mode={self.mode}, period={self.period_sec}s)")
         next_send = time.time() + self.period_sec
         try:
@@ -805,7 +834,6 @@ class SensorWorker:
                     self.mqtt.disconnect()
                 except Exception:
                     pass
-            print(f"[{self.sensor_name.upper()}] stopped.")
 
             try:
                 HTTP.close()
@@ -813,22 +841,86 @@ class SensorWorker:
                 pass
 
 
+# Command-line argument parser
+
 def parse_args(argv):
-    """Parse CLI options for the simulator entry point."""
     p = argparse.ArgumentParser(description="Single-sensor oneM2M simulator (HTTP/MQTT).")
     p.add_argument("--sensor", required=True)
     p.add_argument("--protocol", choices=["http", "mqtt"], required=True)
     p.add_argument("--mode", choices=["csv", "random"], required=True)
     p.add_argument("--frequency", type=float, required=True)
     p.add_argument("--registration", type=int, choices=[0, 1], required=True)
+
+    p.add_argument("--base-url", required=True, help="Base URL with CSE RN (e.g., http://127.0.0.1:3000/TinyIoT)")
+    p.add_argument("--csv-path", help="CSV file path (required when --mode csv)")
+    p.add_argument("--cse-id", help="CSE-ID for MQTT topic (required when --protocol mqtt)")
+    p.add_argument("--mqtt-port", type=int, help="MQTT broker port (required when --protocol mqtt)")
+    p.add_argument("--mqtt-user", help="MQTT broker username (optional, for authenticated brokers)")
+    p.add_argument("--mqtt-pass", help="MQTT broker password (optional, for authenticated brokers)")
+
     return p.parse_args(argv)
 
 
+# Main entry point
+
 def main():
     args = parse_args(sys.argv[1:])
-    if os.getenv("SKIP_HEALTHCHECK", "0") != "1":
-        if not _healthcheck_once():
+
+    # Validate sensor name
+    if not args.sensor or not args.sensor.strip():
+        print("[ERROR] --sensor cannot be empty")
+        sys.exit(1)
+
+    # Validate frequency
+    if args.frequency <= 0:
+        print(f"[ERROR] --frequency must be positive, got {args.frequency}")
+        sys.exit(1)
+
+    parsed_url = urlparse(args.base_url)
+    if not parsed_url.hostname:
+        print(f"[ERROR] Invalid --base-url: hostname not found in '{args.base_url}'")
+        sys.exit(1)
+    if not parsed_url.port:
+        print(f"[ERROR] Invalid --base-url: port not specified in '{args.base_url}' (e.g., http://127.0.0.1:3000/TinyIoT)")
+        sys.exit(1)
+    if not parsed_url.path or parsed_url.path == '/':
+        print(f"[ERROR] Invalid --base-url: CSE RN not specified in path (e.g., http://127.0.0.1:3000/TinyIoT)")
+        sys.exit(1)
+
+    config.HTTP_HOST = parsed_url.hostname
+    config.HTTP_PORT = parsed_url.port
+    config.CSE_RN = parsed_url.path.lstrip('/')
+    config.HTTP_BASE = f"{parsed_url.scheme}://{parsed_url.hostname}:{parsed_url.port}"
+    config.BASE_URL = args.base_url.rstrip('/')
+
+    if args.mode == "csv":
+        if not args.csv_path:
+            print("[ERROR] --csv-path is required when --mode csv")
             sys.exit(1)
+        if not os.path.isfile(args.csv_path):
+            print(f"[ERROR] CSV file not found: {args.csv_path}")
+            sys.exit(1)
+        config.CSV_PATH = args.csv_path
+
+    if args.protocol == "mqtt":
+        if not args.mqtt_port:
+            print("[ERROR] --mqtt-port is required when --protocol mqtt")
+            sys.exit(1)
+        if not args.cse_id:
+            print("[ERROR] --cse-id is required when --protocol mqtt")
+            sys.exit(1)
+        config.MQTT_HOST = config.HTTP_HOST
+        config.MQTT_PORT = args.mqtt_port
+        config.CSE_ID = args.cse_id
+        if args.mqtt_user:
+            config.MQTT_USER = args.mqtt_user
+        if args.mqtt_pass:
+            config.MQTT_PASS = args.mqtt_pass
+
+    if os.getenv("SKIP_HEALTHCHECK", "0") != "1":
+        if not check_server_health():
+            sys.exit(1)
+
     worker = SensorWorker(
         sensor_name=args.sensor,
         protocol=args.protocol,
@@ -840,9 +932,14 @@ def main():
     worker.setup()
     try:
         worker.run()
+        # Only show termination message in standalone mode (not via coordinator)
+        if os.getenv("SKIP_HEALTHCHECK", "0") != "1":
+            print(f"\n[{args.sensor.upper()}] Sensor simulator terminated.")
     except KeyboardInterrupt:
         worker.stop()
-        print("\n[SIM] Interrupted.")
+        # Print newline before interrupt message for clean output
+        print(f"\n\n[{args.sensor.upper()}] Interrupted.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
