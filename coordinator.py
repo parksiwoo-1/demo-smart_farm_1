@@ -232,7 +232,7 @@ def start_simulator(sensor_config: SensorConfig, index: int,
                     mqtt_port: Optional[int],
                     mqtt_user: Optional[str],
                     mqtt_pass: Optional[str]) -> Optional[SimulatorHandle]:
-    """Start a single sensor simulator subprocess."""
+    """Start a sensor simulator subprocess."""
     python_exec = getattr(config, 'PYTHON_EXEC', 'python3')
     sim_args = [
         python_exec, simulator_path,
@@ -269,7 +269,7 @@ def start_simulator(sensor_config: SensorConfig, index: int,
     if isinstance(sim_env, dict):
         env.update(sim_env)
     env['PYTHONUNBUFFERED'] = '1'
-    env['SKIP_HEALTHCHECK'] = '1'
+    env['SKIP_HEALTHCHECK'] = '1'  # Coordinator already verified server health
 
     try:
         proc = subprocess.Popen(
@@ -301,14 +301,12 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true', help='Enable debug mode (show all simulator output)')
     args = parser.parse_args()
 
-    # Validate that we have sensors to run
     if not SENSORS_TO_RUN:
         logging.error("[COORD] No sensors configured in device_profile.dat")
         logging.error("[COORD] Please create device_profile.dat with sensor configurations")
         logging.error("[COORD] Example format: temperature,http,csv,3,1")
         sys.exit(1)
 
-    # Validate simulator path exists
     if not os.path.isfile(args.simulator_path):
         logging.error(f"[COORD] Simulator not found: {args.simulator_path}")
         sys.exit(1)
@@ -324,12 +322,10 @@ if __name__ == '__main__':
         logging.error("[COORD] --mqtt-port is required when using MQTT protocol")
         sys.exit(1)
 
-    # Validate server path if provided
     if args.server_path and not os.path.isfile(args.server_path):
         logging.error(f"[COORD] Server executable not found: {args.server_path}")
         sys.exit(1)
 
-    # Server startup or detection
     server_proc = None
     server_already_running = check_server_running(args.base_url)
 
@@ -358,7 +354,6 @@ if __name__ == '__main__':
                 pass
             sys.exit(1)
 
-    # Sequential simulator startup
     simulator_handles: List[SimulatorHandle] = []
     logging.info(f"[COORD] starting {len(SENSORS_TO_RUN)} sensor simulators...")
 
@@ -389,7 +384,6 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logging.info("[COORD] start interrupted by user.")
 
-    # Startup validation
     if not simulator_handles:
         logging.error("[COORD] No simulators were started successfully.")
         if server_proc:
@@ -438,7 +432,6 @@ if __name__ == '__main__':
 
     logging.info("[COORD] Successfully started all simulators.")
 
-    # Monitoring loop
     try:
         while True:
             if server_proc and server_proc.poll() is not None:
@@ -450,10 +443,9 @@ if __name__ == '__main__':
                 break
             time.sleep(5)
     except KeyboardInterrupt:
-        time.sleep(0.5)  # Let tinyIoT server finish its shutdown logs first
-        print()  # Print blank line for clean separation
+        time.sleep(0.5)
+        print()
     finally:
-        # Graceful shutdown
         cleanup_interrupted = False
 
         running_count = sum(1 for h in simulator_handles if h.proc and h.proc.poll() is None)
