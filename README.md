@@ -161,7 +161,7 @@ https://github.com/seslabSJU/tinyIoT
          Active: active (running) since ...
     ```
 
-**If you see `active (running)`, it's working.**
+    **If you see `active (running)`, it's working.**
 
 ### 3. Clone the Project
 
@@ -349,5 +349,6 @@ python3 simulator.py \
     --cse-id {CSE_ID} \
     --mqtt-port {PORT}
 ```
+
 
 
