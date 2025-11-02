@@ -16,6 +16,7 @@ import time
 from typing import List, Optional
 
 import requests
+from dotenv import load_dotenv
 
 import config_coord as config
 
@@ -229,9 +230,7 @@ def start_simulator(sensor_config: SensorConfig, index: int,
                     simulator_path: str, base_url: str,
                     csv_base_path: Optional[str],
                     cse_id: Optional[str],
-                    mqtt_port: Optional[int],
-                    mqtt_user: Optional[str],
-                    mqtt_pass: Optional[str]) -> Optional[SimulatorHandle]:
+                    mqtt_port: Optional[int]) -> Optional[SimulatorHandle]:
     """Start a sensor simulator subprocess."""
     python_exec = getattr(config, 'PYTHON_EXEC', 'python3')
     sim_args = [
@@ -256,12 +255,8 @@ def start_simulator(sensor_config: SensorConfig, index: int,
             sim_args.extend(['--cse-id', cse_id])
         if mqtt_port:
             sim_args.extend(['--mqtt-port', str(mqtt_port)])
-        if mqtt_user:
-            sim_args.extend(['--mqtt-user', mqtt_user])
-        if mqtt_pass:
-            sim_args.extend(['--mqtt-pass', mqtt_pass])
 
-    logging.info(f"[COORD] Starting simulator [{sensor_config.sensor_type}]...")
+    logging.debug(f"[COORD] Starting simulator [{sensor_config.sensor_type}]...")
     logging.debug(f"[COORD] Command: {' '.join(sim_args)}")
 
     env = os.environ.copy()
@@ -289,6 +284,7 @@ def start_simulator(sensor_config: SensorConfig, index: int,
 # Main entry point
 
 if __name__ == '__main__':
+    load_dotenv()  # Load environment variables from .env file
     parser = argparse.ArgumentParser(description="Coordinator for tinyIoT server and sensor simulators")
     parser.add_argument('--server-path', help='Path to tinyIoT server executable (required if server is not already running)')
     parser.add_argument('--simulator-path', required=True, help='Path to simulator.py')
@@ -296,10 +292,13 @@ if __name__ == '__main__':
     parser.add_argument('--csv-base-path', help='Base directory for CSV files (default: smartfarm_data/)')
     parser.add_argument('--cse-id', help='CSE-ID for MQTT topic (required when using MQTT protocol)')
     parser.add_argument('--mqtt-port', type=int, help='MQTT broker port (required when using MQTT protocol)')
-    parser.add_argument('--mqtt-user', help='MQTT broker username (optional, for authenticated brokers)')
-    parser.add_argument('--mqtt-pass', help='MQTT broker password (optional, for authenticated brokers)')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode (show all simulator output)')
     args = parser.parse_args()
+
+    # Set logging level based on --debug flag
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.debug("[COORD] Debug mode enabled")
 
     if not SENSORS_TO_RUN:
         logging.error("[COORD] No sensors configured in device_profile.dat")
@@ -365,16 +364,14 @@ if __name__ == '__main__':
                 args.base_url,
                 args.csv_base_path,
                 args.cse_id,
-                args.mqtt_port,
-                args.mqtt_user,
-                args.mqtt_pass
+                args.mqtt_port
             )
             if not handle:
                 logging.error(f"[COORD] Failed to start simulator [{sensor_conf.sensor_type}]")
                 continue
-            logging.info(f"[COORD] Waiting for simulator [{sensor_conf.sensor_type}] to finish registration...")
+            logging.debug(f"[COORD] Waiting for simulator [{sensor_conf.sensor_type}] to finish registration...")
             if handle.wait_until_ready():
-                logging.info(f"[COORD] Simulator [{sensor_conf.sensor_type}] ready.")
+                logging.debug(f"[COORD] Simulator [{sensor_conf.sensor_type}] ready.")
                 simulator_handles.append(handle)
             else:
                 logging.error(f"[COORD] Simulator [{sensor_conf.sensor_type}] failed during setup; terminating start sequence.")
@@ -412,8 +409,7 @@ if __name__ == '__main__':
                     handle.terminate()
                     handle.proc.wait(timeout=getattr(config, 'PROC_TERM_WAIT', 5))
                 except Exception:
-                    if args.debug:
-                        logging.warning(f"[COORD] Failed to terminate simulator [{handle.sensor_type}]; killing...")
+                    logging.warning(f"[COORD] Failed to terminate simulator [{handle.sensor_type}]; killing...")
                     handle.kill()
             handle.join_reader(getattr(config, 'JOIN_READER_TIMEOUT', 1.0))
 
@@ -456,19 +452,14 @@ if __name__ == '__main__':
                     handle.terminate()
                     handle.proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    if args.debug:
-                        logging.warning(f"[COORD] Simulator [{handle.sensor_type}] did not exit in time; killing...")
+                    logging.warning(f"[COORD] Simulator [{handle.sensor_type}] did not exit in time; killing...")
                     handle.kill()
                 except KeyboardInterrupt:
                     cleanup_interrupted = True
-                    if args.debug:
-                        logging.warning(
-                            f"[COORD] Cleanup interrupted while waiting for simulator [{handle.sensor_type}]; killing..."
-                        )
+                    logging.warning(f"[COORD] Cleanup interrupted while waiting for simulator [{handle.sensor_type}]; killing...")
                     handle.kill()
                 except Exception as e:
-                    if args.debug:
-                        logging.warning(f"[COORD] Failed to terminate simulator [{handle.sensor_type}]: {e}; killing...")
+                    logging.warning(f"[COORD] Failed to terminate simulator [{handle.sensor_type}]: {e}; killing...")
                     handle.kill()
             handle.join_reader()
 
