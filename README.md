@@ -130,36 +130,36 @@ https://github.com/seslabSJU/tinyIoT
     allow_anonymous true
     ```
 
-For this project, we proceed with anonymous access enabled. If you intend to use MQTT authentication, do not change it to `true`—keep it as `false`.
+    For this project, we proceed with anonymous access enabled. If you intend to use MQTT authentication, do not change it to `true`—keep it as `false`.
 
-If you use authentication, fill your values in `.env`. If you use anonymous access, you don't need to fill `.env`.
+    If you use authentication, fill your values in `.env`. If you use anonymous access, you don't need to fill `.env`.
 
-```bash
-MQTT_USER=
-MQTT_PASS=
-```
+    ```bash
+    MQTT_USER=
+    MQTT_PASS=
+    ```
 
 3. Run Mosquitto (performed from WSL via Windows PowerShell)
 
-- Start mosquitto:
+    - Start mosquitto:
 
-```bash
-sudo systemctl start mosquitto
-```
+    ```bash
+    sudo systemctl start mosquitto
+    ```
 
-- Check if mosquitto is running:
+    - Check if mosquitto is running:
 
-```bash
-sudo systemctl status mosquitto
-```
+    ```bash
+    sudo systemctl status mosquitto
+    ```
 
-- Successful status example:
+    - Successful status example:
 
-```bash
-● mosquitto.service - Mosquitto MQTT Broker
-     Loaded: loaded (/usr/lib/systemd/system/mosquitto.service; enabled; preset: enabled)
-     Active: active (running) since ...
-```
+    ```bash
+    ● mosquitto.service - Mosquitto MQTT Broker
+         Loaded: loaded (/usr/lib/systemd/system/mosquitto.service; enabled; preset: enabled)
+         Active: active (running) since ...
+    ```
 
 **If you see `active (running)`, it's working.**
 
@@ -349,4 +349,5 @@ python3 simulator.py \
     --cse-id {CSE_ID} \
     --mqtt-port {PORT}
 ```
+
 
