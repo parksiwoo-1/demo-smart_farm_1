@@ -304,7 +304,7 @@ Provide only the parameters required based on the options defined in `device_pro
 ...
 [HUMIDITY] Sent value: 55.0
 ...
-[SOIL] Sent value: 0.0
+[CO2] Sent value: 45.0
 ...
 [SOIL] Sent value: 0.0
 ```
@@ -376,6 +376,7 @@ python3 simulator.py \
 | `--csv-path` | Path to the CSV data file | Required when --mode csv |
 | `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
 | `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
+
 
 
 
