@@ -296,7 +296,7 @@ Provide only the parameters required based on the options defined in `device_pro
         --mqtt-port 1883
     ```
 
-- Successful status example:
+- **Successful status example**:
 ```bash
 [INFO] [COORD] Successfully started all simulators.
 ...
@@ -376,6 +376,7 @@ python3 simulator.py \
 | `--csv-path` | Path to the CSV data file | Required when --mode csv |
 | `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
 | `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
+
 
 
 
