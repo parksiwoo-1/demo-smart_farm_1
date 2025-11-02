@@ -11,5 +11,5 @@
 
 temperature,http,csv,3,1
 humidity,http,csv,3,1
-co2,mqtt,csv,3,1
-soil,mqtt,csv,3,1
+co2,http,csv,3,1
+soil,http,csv,3,1
