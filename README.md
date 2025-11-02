@@ -94,41 +94,41 @@ https://github.com/seslabSJU/tinyIoT
 
 1. Install Mosquitto
 
-- Visit:
+    - Visit:
 
-```
-https://mosquitto.org
-```
+    ```bash
+    https://mosquitto.org
+    ```
 
-- Click **Download** on the site.
+    - Click **Download** on the site.
 
-- On Windows, install `mosquitto-2.0.22-install-windows-x64.exe`.
+    - On Windows, install `mosquitto-2.0.22-install-windows-x64.exe`.
 
 2. Edit mosquitto.conf
 
-- Open the `mosquitto.conf` file.
+    - Open the `mosquitto.conf` file.
 
-- Add `listener 1883` and `protocol mqtt`.
+    - Add `listener 1883` and `protocol mqtt`.
 
-```bash
-# listener port-number [ip address/host name/unix socket path]
-listener 1883
-protocol mqtt
-```
+    ```bash
+    # listener port-number [ip address/host name/unix socket path]
+    listener 1883
+    protocol mqtt
+    ```
 
-- Uncomment `allow_anonymous false`. (If it doesn't exist, add it.)
+    - Uncomment `allow_anonymous false`. (If it doesn't exist, add it.)
 
-```bash
-# the local machine.
-allow_anonymous false
-```
+    ```bash
+    # the local machine.
+    allow_anonymous false
+    ```
 
-Then change `false` to `true`.
+    - Then change `false` to `true`.
 
-```bash
-# the local machine.
-allow_anonymous true
-```
+    ```bash
+    # the local machine.
+    allow_anonymous true
+    ```
 
 For this project, we proceed with anonymous access enabled. If you intend to use MQTT authentication, do not change it to `true`—keep it as `false`.
 
@@ -349,3 +349,4 @@ python3 simulator.py \
     --cse-id {CSE_ID} \
     --mqtt-port {PORT}
 ```
+
