@@ -289,7 +289,7 @@ Provide only the parameters required based on the options defined in `device_pro
     
     ```bash
     python3 coordinator.py \
-        --base-url http://127.0.0.1:TinyIoT \
+        --base-url http://127.0.0.1:3000/TinyIoT \
         --simulator-path ./simulator.py \
         --csv-base-path ./smartfarm_data \
         --cse-id tinyiot \
@@ -363,6 +363,7 @@ python3 simulator.py \
 | `--csv-path` | Path to the CSV data file | Required when --mode csv |
 | `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
 | `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
+
 
 
 
