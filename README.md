@@ -260,38 +260,38 @@ Refer to **Parameter Reference** above and supply parameters appropriate for you
 
 Provide only the parameters required based on the options defined in `device_profile.dat`.
 
-When the tinyIoT server is already running:
+    - When the tinyIoT server is already running:
 
-```bash
-python3 coordinator.py \
-    --base-url {URL}/{CSE_RN} \
-    --simulator-path simulator.py \
-    --csv-base-path smartfarm_data \
-    --cse-id {CSE_ID} \
-    --mqtt-port {PORT}
-```
+    ```bash
+    python3 coordinator.py \
+        --base-url {URL}/{CSE_RN} \
+        --simulator-path simulator.py \
+        --csv-base-path smartfarm_data \
+        --cse-id {CSE_ID} \
+        --mqtt-port {PORT}
+    ```
 
-When the tinyIoT server is not running:
+    - When the tinyIoT server is not running:
 
-```bash
-python3 coordinator.py \
-    --server-path {SERVER_PATH} \
-    --base-url {URL}/{CSE_RN} \
-    --simulator-path simulator.py \
-    --csv-base-path smartfarm_data \
-    --cse-id {CSE_ID} \
-    --mqtt-port {PORT}
-```
+    ```bash
+    python3 coordinator.py \
+        --server-path {SERVER_PATH} \
+        --base-url {URL}/{CSE_RN} \
+        --simulator-path simulator.py \
+        --csv-base-path smartfarm_data \
+        --cse-id {CSE_ID} \
+        --mqtt-port {PORT}
+    ```
 
-**Running example**
-```bash
-python3 coordinator.py \
-    --base-url http://127.0.0.1:TinyIoT \
-    --simulator-path ./simulator.py \
-    --csv-base-path ./smartfarm_data \
-    --cse-id tinyiot \
-    --mqtt-port 1883
-```
+    **Running example**
+    ```bash
+    python3 coordinator.py \
+        --base-url http://127.0.0.1:TinyIoT \
+        --simulator-path ./simulator.py \
+        --csv-base-path ./smartfarm_data \
+        --cse-id tinyiot \
+        --mqtt-port 1883
+    ```
 
 
 ### How to Stop
@@ -360,6 +360,7 @@ python3 simulator.py \
 | `--csv-path` | Path to the CSV data file | Required when --mode csv |
 | `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
 | `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
+
 
 
 
