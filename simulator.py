@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 import paho.mqtt.client as mqtt
 import requests
+from dotenv import load_dotenv
 
 import config_sim as config
 
@@ -855,8 +856,6 @@ def parse_args(argv):
     p.add_argument("--csv-path", help="CSV file path (required when --mode csv)")
     p.add_argument("--cse-id", help="CSE-ID for MQTT topic (required when --protocol mqtt)")
     p.add_argument("--mqtt-port", type=int, help="MQTT broker port (required when --protocol mqtt)")
-    p.add_argument("--mqtt-user", help="MQTT broker username (optional, for authenticated brokers)")
-    p.add_argument("--mqtt-pass", help="MQTT broker password (optional, for authenticated brokers)")
 
     return p.parse_args(argv)
 
@@ -864,6 +863,7 @@ def parse_args(argv):
 # Main entry point
 
 def main():
+    load_dotenv()  # Load environment variables from .env file
     args = parse_args(sys.argv[1:])
 
     if not args.sensor or not args.sensor.strip():
@@ -910,10 +910,6 @@ def main():
         config.MQTT_HOST = config.HTTP_HOST
         config.MQTT_PORT = args.mqtt_port
         config.CSE_ID = args.cse_id
-        if args.mqtt_user:
-            config.MQTT_USER = args.mqtt_user
-        if args.mqtt_pass:
-            config.MQTT_PASS = args.mqtt_pass
 
     if os.getenv("SKIP_HEALTHCHECK", "0") != "1":
         if not check_server_health():
