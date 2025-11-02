@@ -283,6 +283,17 @@ python3 coordinator.py \
     --mqtt-port {PORT}
 ```
 
+**Running example**
+```bash
+python3 coordinator.py \
+    --base-url http://127.0.0.1:TinyIoT \
+    --simulator-path simulator.py \
+    --csv-base-path smartfarm_data \
+    --cse-id tinyiot \
+    --mqtt-port 1883
+```
+
+
 ### How to Stop
 
 Press `Ctrl+C` in the running terminal to gracefully stop all simulators and the server.
@@ -349,6 +360,7 @@ python3 simulator.py \
 | `--csv-path` | Path to the CSV data file | Required when --mode csv |
 | `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
 | `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
+
 
 
 
