@@ -233,26 +233,6 @@ soil,mqtt,csv,3,1
 | `--mqtt-port` | Port number of the MQTT broker | Required when protocol is mqtt |
 | `--debug` | Enable debug mode (verbose logging) | For troubleshooting |
 
-### Parameters for simulator.py
-
-#### Required
-
-| Parameter | Description | Allowed Values |
-|-----------|-------------|----------------|
-| `--sensor` | Sensor type to simulate | temperature, humidity, co2, soil, etc. |
-| `--protocol` | Data transmission protocol | http, mqtt |
-| `--mode` | Data generation method | csv (read from file), random (generate) |
-| `--frequency` | Data transmission interval (seconds) | positive integer |
-| `--registration` | Auto-register AE/CNT resources | 0 (skip), 1 (register) |
-| `--base-url` | Base URL of tinyIoT server | http://host:port/CSE_RN |
-
-#### Conditionally Required
-
-| Parameter | Description | When Needed |
-|-----------|-------------|-------------|
-| `--csv-path` | Path to the CSV data file | Required when --mode csv |
-| `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
-| `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
 
 ## How to Run
 
@@ -327,6 +307,28 @@ Each CSV file contains about 1,000 real smart-farm data points.
 
 You can also run an individual sensor directly:
 
+### Parameters for simulator.py
+
+#### Required
+
+| Parameter | Description | Allowed Values |
+|-----------|-------------|----------------|
+| `--sensor` | Sensor type to simulate | temperature, humidity, co2, soil, etc. |
+| `--protocol` | Data transmission protocol | http, mqtt |
+| `--mode` | Data generation method | csv (read from file), random (generate) |
+| `--frequency` | Data transmission interval (seconds) | positive integer |
+| `--registration` | Auto-register AE/CNT resources | 0 (skip), 1 (register) |
+| `--base-url` | Base URL of tinyIoT server | http://host:port/CSE_RN |
+
+#### Conditionally Required
+
+| Parameter | Description | When Needed |
+|-----------|-------------|-------------|
+| `--csv-path` | Path to the CSV data file | Required when --mode csv |
+| `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
+| `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
+
+
 ```bash
 # Temperature sensor (HTTP, CSV mode)
 python3 simulator.py \
@@ -349,6 +351,7 @@ python3 simulator.py \
     --cse-id {CSE_ID} \
     --mqtt-port {PORT}
 ```
+
 
 
 
