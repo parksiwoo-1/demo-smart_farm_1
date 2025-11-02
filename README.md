@@ -260,7 +260,7 @@ Refer to **Parameter Reference** above and supply parameters appropriate for you
 
 Provide only the parameters required based on the options defined in `device_profile.dat`.
 
-    - When the tinyIoT server is already running:
+- When the tinyIoT server is already running:
 
     ```bash
     python3 coordinator.py \
@@ -362,6 +362,7 @@ python3 simulator.py \
 | `--csv-path` | Path to the CSV data file | Required when --mode csv |
 | `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
 | `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
+
 
 
 
