@@ -271,6 +271,7 @@ Provide only the parameters required based on the options defined in `device_pro
         --mqtt-port {PORT}
     ```
 
+
     - When the tinyIoT server is not running:
 
     ```bash
@@ -282,6 +283,7 @@ Provide only the parameters required based on the options defined in `device_pro
         --cse-id {CSE_ID} \
         --mqtt-port {PORT}
     ```
+
 
     **Running example**
     ```bash
@@ -360,6 +362,7 @@ python3 simulator.py \
 | `--csv-path` | Path to the CSV data file | Required when --mode csv |
 | `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
 | `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
+
 
 
 
