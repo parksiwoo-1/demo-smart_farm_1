@@ -94,52 +94,19 @@ https://github.com/seslabSJU/tinyIoT
 
 1. Install Mosquitto
 
-    - Visit:
+    ```bash
+    sudo apt update
+    ```
+    
+    ```bash
+    sudo apt install mosquitto
+     ```
 
     ```bash
-    https://mosquitto.org
+    sudo apt install mosquitto-clients
     ```
 
-    - Click **Download** on the site.
-
-    - On Windows, install `mosquitto-2.0.22-install-windows-x64.exe`.
-
-2. Edit mosquitto.conf
-
-    - Open the `mosquitto.conf` file.
-
-    - Add `listener 1883` and `protocol mqtt`.
-
-    ```bash
-    # listener port-number [ip address/host name/unix socket path]
-    listener 1883
-    protocol mqtt
-    ```
-
-    - Uncomment `allow_anonymous false`. (If it doesn't exist, add it.)
-
-    ```bash
-    # the local machine.
-    allow_anonymous false
-    ```
-
-    - Then change `false` to `true`.
-
-    ```bash
-    # the local machine.
-    allow_anonymous true
-    ```
-
-    For this project, we proceed with anonymous access enabled. If you intend to use MQTT authentication, do not change it to `true`—keep it as `false`.
-
-    If you use authentication, fill your values in `.env`. If you use anonymous access, you don't need to fill `.env`.
-
-    ```bash
-    MQTT_USER=
-    MQTT_PASS=
-    ```
-
-3. Run Mosquitto (performed from WSL via Windows PowerShell)
+2. Run Mosquitto (performed from WSL via Windows PowerShell)
 
     - Start mosquitto:
 
@@ -163,6 +130,16 @@ https://github.com/seslabSJU/tinyIoT
 
     **If you see `active (running)`, it's working.**
 
+
+For this project, we proceed with anonymous access enabled. If you intend to use MQTT authentication, do not change it to `true`—keep it as `false`.
+
+    If you use authentication, fill your values in `.env`. If you use anonymous access, you don't need to fill `.env`.
+
+    ```bash
+    MQTT_USER=
+    MQTT_PASS=
+    ```
+
 ### 3. Clone the Project
 
 Clone this project. Choose a path that won't conflict with an existing tinyIoT directory.
@@ -172,15 +149,8 @@ Enter the following in Ubuntu in order:
 ```bash
 cd {path}
 
-git clone --filter=blob:none --no-checkout --branch dev --single-branch https://github.com/seslabSJU/tinyIoT.git
+git clone https://github.com/parksiwoo-1/smart_farm_1
 
-cd tinyIoT
-
-git sparse-checkout init --cone
-
-git sparse-checkout set demo/smart_farm_1
-
-git checkout
 ```
 
 ### 4. Modify Configuration Files
@@ -244,6 +214,8 @@ Navigate to the project path:
 
 ```bash
 cd path/tinyIoT/demo/smart_farm_1  # example path
+
+sudo apt install python3.10-venv
 
 python3 -m venv .venv
 
@@ -376,6 +348,7 @@ python3 simulator.py \
 | `--csv-path` | Path to the CSV data file | Required when --mode csv |
 | `--cse-id` | CSE identifier for MQTT topics | Required when --protocol mqtt |
 | `--mqtt-port` | MQTT broker port | Required when --protocol mqtt |
+
 
 
 
